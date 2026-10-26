@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic>=2
+httpx
+jinja2              # mock company web UI
+playwright          # browser fallback
+google-genai        # google-genai
+python-dotenv
+sse-starlette       # live event streaming
+rank-bm25           # policy search, no vector DB needed
+pytest
+pytest-asyncio

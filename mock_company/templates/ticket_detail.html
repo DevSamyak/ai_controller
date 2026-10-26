@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Ticket {{ ticket.id }}</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 2rem; background: #f6f1e7; color: #1f1a14; }
+    dl { background: #fff; padding: 1rem 1.25rem; border: 1px solid #cbb79a; }
+    dt { font-weight: bold; margin-top: 0.75rem; }
+  </style>
+</head>
+<body>
+  <p><a href="/ui/tickets">Back to list</a></p>
+  <h1 id="ticket-id">{{ ticket.id }}</h1>
+  <dl id="ticket-detail"
+      data-id="{{ ticket.id }}"
+      data-title="{{ ticket.title }}"
+      data-body="{{ ticket.body }}"
+      data-customer="{{ ticket.customer }}"
+      data-status="{{ ticket.status }}"
+      data-priority="{{ ticket.priority }}"
+      data-created-at="{{ ticket.created_at }}"
+      data-due-at="{{ ticket.due_at or '' }}"
+      data-order-id="{{ ticket.order_id or '' }}"
+      data-refund-amount="{{ ticket.refund_amount if ticket.refund_amount is not none else '' }}"
+      data-days-since-purchase="{{ ticket.days_since_purchase if ticket.days_since_purchase is not none else '' }}"
+      data-refunded="{{ 'true' if ticket.refunded else 'false' }}"
+      data-refunded-amount="{{ ticket.refunded_amount if ticket.refunded_amount is not none else '' }}">
+    <dt>Title</dt><dd id="ticket-title">{{ ticket.title }}</dd>
+    <dt>Status</dt><dd id="ticket-status">{{ ticket.status }}</dd>
+    <dt>Priority</dt><dd id="ticket-priority">{{ ticket.priority }}</dd>
+    <dt>Customer</dt><dd id="ticket-customer">{{ ticket.customer }}</dd>
+    <dt>Order ID</dt><dd id="ticket-order-id">{{ ticket.order_id or "" }}</dd>
+    <dt>Refund amount</dt><dd id="ticket-refund-amount">{{ ticket.refund_amount if ticket.refund_amount is not none else "" }}</dd>
+    <dt>Days since purchase</dt><dd id="ticket-days-since-purchase">{{ ticket.days_since_purchase if ticket.days_since_purchase is not none else "" }}</dd>
+    <dt>Refunded</dt><dd id="ticket-refunded">{{ ticket.refunded }}</dd>
+    <dt>Created</dt><dd id="ticket-created-at">{{ ticket.created_at }}</dd>
+    <dt>Due</dt><dd id="ticket-due-at">{{ ticket.due_at or "" }}</dd>
+    <dt>Body</dt><dd id="ticket-body">{{ ticket.body }}</dd>
+  </dl>
+</body>
+</html>

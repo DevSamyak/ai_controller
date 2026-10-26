@@ -1,0 +1,63 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --ink: #1c1917;
+  --muted: #57534e;
+  --card: #fffdf8;
+  --line: #e7e0d4;
+  --accent: #0f766e;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --ok: #15803d;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); }
+.app { max-width: 1100px; margin: 0 auto; padding: 24px 18px 48px; }
+header h1 { margin: 0 0 4px; font-size: 1.6rem; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+.goal-form { display: flex; gap: 8px; margin-bottom: 16px; }
+.goal-form textarea {
+  flex: 1;
+  min-height: 64px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+button {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+button.secondary { background: #44403c; }
+button.danger { background: var(--bad); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.card h2 { margin: 0 0 10px; font-size: 1rem; }
+.status { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.status.complete, .status.ok { color: var(--ok); }
+.status.waiting_approval, .status.partial { color: var(--warn); }
+.status.blocked, .status.failed { color: var(--bad); }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { border-top: 1px solid var(--line); padding: 8px 0; font-size: 0.92rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #efe8db; margin-right: 6px; }
+.error { color: var(--bad); }
+.wide { grid-column: 1 / -1; }
+pre { white-space: pre-wrap; word-break: break-word; background: #faf6ee; padding: 8px; border-radius: 8px; }
+@media (max-width: 800px) {
+  .grid { grid-template-columns: 1fr; }
+  .goal-form { flex-direction: column; }
+}

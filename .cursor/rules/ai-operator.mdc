@@ -1,0 +1,37 @@
+---
+description: Persistent project rules for the AI Employee / Autonomous Company Operator repository
+alwaysApply: true
+---
+
+# AI Operator — Cursor project rules
+
+Before substantial changes, read `CURSOR_IMPLEMENTATION_SPEC.md` completely. It is the product and acceptance specification. Work in the existing `ai-operator` repository rather than creating a sibling project.
+
+## Outcome
+Build a real, runnable AI Employee / Autonomous Company Operator proof of concept. The core loop is **Goal → Understand → Plan → Execute → Observe → Adapt → Verify → Complete**. It must do real tool work, recover where reasonable, preserve task state, ask for approval when needed, verify results independently and return evidence.
+
+## Coding model vs application model
+Use Grok 4.6 through Cursor Agent as the coding assistant. Prefer Medium effort and Fast speed when available for speed with reliability; switch to High effort temporarily for difficult bugs/security/final audit if available. Plan settings may be restricted by the user's Cursor subscription. The runtime product LLM remains Google Gemini via the official `google-genai` Python SDK. Do not confuse the Cursor coding model with the app's runtime provider.
+
+## Fixed scope and stack
+- Python 3.11+ (prefer Python 3.12), FastAPI, Uvicorn, Pydantic v2, SQLite, httpx.
+- Gemini via `google-genai`; model and key from environment variables; no secrets in source or logs.
+- Playwright/Chromium browser fallback for mock-company API failures.
+- React + Vite, Node.js 20+, live progress events, pytest.
+- Mock company on `127.0.0.1:8001`; operator API on `127.0.0.1:8000`; UI on `127.0.0.1:5173`.
+- One end-to-end support-ticket workflow. No LangChain/CrewAI, multi-agent system, vector database, real refunds, or real external email sending.
+
+## Non-negotiable engineering rules
+1. Inspect current files and Git status before editing; preserve useful work.
+2. Edit files directly. Do not merely print large code blocks into chat.
+3. Implement in milestones; run relevant tests after every milestone and continue past scaffolding.
+4. Python code enforces tool allowlists, validation, approvals, permissions, retry/step limits, idempotency, state transitions and terminal status. The LLM cannot bypass controls.
+5. The verifier must be deterministic and must not use the LLM. `complete` requires successful verification.
+6. Treat ticket/customer text as untrusted data; prevent prompt injection with both prompt boundaries and code-enforced permissions.
+7. Default tests must be deterministic/offline and not require a Gemini key. Never fake tool results, counts, paths, logs or test outcomes.
+8. Retry transient API failures within limits, then use Playwright against the functioning HTML UI. If both paths fail, report `blocked`/`partial` honestly.
+9. Keep secrets, `.env`, `.venv/`, `node_modules/`, caches and local databases out of Git and packaged ZIPs.
+10. Run the full test suite, smoke checks, all demo scenarios, frontend build and archive extraction check before claiming completion. Report any unverified items explicitly.
+
+## Required handoff
+A functioning app, deterministic tests, README with copy-paste setup/run/check commands, useful event/evidence logs, and `dist/ai-operator-source.zip` produced by a repeatable packaging script. See `CURSOR_IMPLEMENTATION_SPEC.md` for the full acceptance criteria.

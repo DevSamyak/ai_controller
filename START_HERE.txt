@@ -1,0 +1,37 @@
+CURSOR + GROK 4.6 — START HERE
+
+GOAL
+Use Cursor Agent to implement the existing AI Employee / Autonomous Company Operator starter project end to end, with real tests and a clean source ZIP at the end.
+
+RECOMMENDED CURSOR SETTINGS
+- Model: Grok 4.6
+- Effort: Medium for the main build (balanced speed/reliability)
+- Speed: choose Fast if the model picker/your plan exposes it. If unavailable, use the plan's available standard mode; do not waste time trying to override plan restrictions.
+- For hard security bugs or final verification, switch to High effort briefly if available.
+
+SETUP
+1. Extract the user's existing ai-operator.zip.
+2. Open the extracted ai-operator folder itself as the Cursor workspace.
+3. Merge the files/folders from this prompt pack into that project root. Preserve existing source files. The pack contains:
+   - .cursor/rules/ai-operator.mdc
+   - CURSOR_IMPLEMENTATION_SPEC.md
+   - START_HERE.txt
+4. Check the Cursor Rules panel if needed and confirm the `ai-operator` project rule is active.
+5. Open Cursor Agent and paste the prompt below.
+
+PROMPT TO PASTE INTO CURSOR AGENT
+
+Read `.cursor/rules/ai-operator.mdc` and `CURSOR_IMPLEMENTATION_SPEC.md` completely. Inspect the actual repository, current Git changes, files and environment first. Then implement the complete specification directly in this workspace, milestone by milestone. Do not stop after planning, scaffolding, or writing a file tree. Run relevant tests after each milestone, fix failures, and continue through the definition of done.
+
+The app's runtime provider is Google Gemini through `google-genai`; Grok 4.6 is only the model I selected in Cursor to help write the code. Implement the real FastAPI mock company, SQLite state, ticket/policy tools, autonomous orchestrator, bounded retries, Playwright fallback, approval gates, prompt-injection resistance, idempotency, deterministic verifier, real evidence logs, React/Vite live dashboard, seeded scenarios and automated tests.
+
+Keep default tests deterministic and independent of a live Gemini key/network. Use actual tool results and actual files. Never claim completion just because the model says it is done. When a tool or API fails, observe the failure, retry/fallback within limits, or stop honestly as blocked/partial. Do not weaken tests to manufacture a pass.
+
+Run the test suite, health checks, smoke script, demo scenarios, frontend production build, and the package/extraction checks. Build `dist/ai-operator-source.zip` through a repeatable packaging script while excluding `.env`, keys, `.venv`, `node_modules`, caches and runtime databases/logs. Update `README.md` with exact tested install/run/verify commands. In your final reply, report only observed outcomes, exact commands, test counts, local URLs, archive path, and anything that remains unverified. Begin now: inspect the workspace, report a brief status, implement milestone 1, test it, and continue.
+
+END
+
+NOTES
+- The original ai-operator.zip is only an early scaffold. Inspect before replacing any files.
+- Python 3.12 is fine for this Python 3.11+ project; Node.js 20+ is required.
+- Keep the Gemini key only in `.env`; never paste it into chat or commit it.

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mock Company Tickets</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 2rem; background: #f6f1e7; color: #1f1a14; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #cbb79a; padding: 0.5rem 0.75rem; text-align: left; }
+    .status-open { color: #8a1c1c; }
+    .status-resolved { color: #1c5a32; }
+    .banner { background: #efe4d0; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Support tickets</h1>
+  <p class="banner" id="ui-status">HTML UI reads SQLite directly and stays available when the JSON API is faulted.</p>
+  <p>Filter: status={{ status or "any" }}, priority={{ priority or "any" }}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>Title</th><th>Customer</th><th>Status</th><th>Priority</th>
+        <th>Order</th><th>Refund</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tickets %}
+      <tr id="ticket-row-{{ t.id }}"
+          data-id="{{ t.id }}"
+          data-title="{{ t.title }}"
+          data-body="{{ t.body }}"
+          data-customer="{{ t.customer }}"
+          data-status="{{ t.status }}"
+          data-priority="{{ t.priority }}"
+          data-created-at="{{ t.created_at }}"
+          data-due-at="{{ t.due_at or '' }}"
+          data-order-id="{{ t.order_id or '' }}"
+          data-refund-amount="{{ t.refund_amount if t.refund_amount is not none else '' }}"
+          data-days-since-purchase="{{ t.days_since_purchase if t.days_since_purchase is not none else '' }}"
+          data-refunded="{{ 'true' if t.refunded else 'false' }}"
+          data-refunded-amount="{{ t.refunded_amount if t.refunded_amount is not none else '' }}">
+        <td><a href="/ui/tickets/{{ t.id }}" id="ticket-link-{{ t.id }}">{{ t.id }}</a></td>
+        <td>{{ t.title }}</td>
+        <td>{{ t.customer }}</td>
+        <td class="status-{{ t.status }}" id="ticket-status-{{ t.id }}">{{ t.status }}</td>
+        <td>{{ t.priority }}</td>
+        <td>{{ t.order_id or "" }}</td>
+        <td>{{ t.refund_amount if t.refund_amount is not none else "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
