@@ -503,6 +503,8 @@ textarea:focus {
   border-radius: 6px;
   padding: 0.65rem;
   font-size: 0.85rem;
+  content-visibility: auto;
+  contain-intrinsic-size: 60px;
 }
 
 .tool-call-row.ok {
@@ -638,6 +640,8 @@ textarea:focus {
   border-radius: 4px;
   padding: 0.5rem;
   font-size: 0.8rem;
+  content-visibility: auto;
+  contain-intrinsic-size: 50px;
 }
 
 .event-type {

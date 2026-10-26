@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { api } from "./api.js";
 
 const DEFAULT_GOAL =
@@ -14,48 +14,68 @@ export default function App() {
   const [error, setError] = useState(null);
   const [liveEvents, setLiveEvents] = useState([]);
   const [artifactModal, setArtifactModal] = useState(null);
-  const eventSourceRef = useRef(null);
 
-  // Check backend health and fetch task list
-  const refreshTasks = async () => {
+  const eventSourceRef = useRef(null);
+  const isFetchingRef = useRef(false);
+  const debounceTimerRef = useRef(null);
+
+  // Fetch task list and backend health (throttled)
+  const refreshTasks = useCallback(async () => {
     try {
       const h = await api.health();
-      setHealth(h);
+      setHealth((prev) => (prev?.status === h.status && prev?.llm_provider === h.llm_provider ? prev : h));
+
       const res = await api.listTasks();
       if (res.tasks) {
-        setTasks(res.tasks);
-        if (!currentTaskId && res.tasks.length > 0) {
-          setCurrentTaskId(res.tasks[0].id);
-        }
+        setTasks((prev) => {
+          if (prev.length === res.tasks.length && prev[0]?.id === res.tasks[0]?.id && prev[0]?.status === res.tasks[0]?.status) {
+            return prev;
+          }
+          return res.tasks;
+        });
+        setCurrentTaskId((curr) => curr || (res.tasks.length > 0 ? res.tasks[0].id : null));
       }
     } catch (err) {
       setError(err.message || "Failed to connect to backend");
     }
-  };
+  }, []);
 
   useEffect(() => {
     refreshTasks();
-    const interval = setInterval(refreshTasks, 5000);
+    const interval = setInterval(refreshTasks, 6000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshTasks]);
 
-  // Fetch full snapshot when currentTaskId changes
-  const fetchTaskDetails = async (id) => {
-    if (!id) return;
+  // Fetch full snapshot with in-flight lock to avoid concurrent thrashing
+  const fetchTaskDetails = useCallback(async (id) => {
+    if (!id || isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       const snap = await api.getTask(id);
       setTaskData(snap);
     } catch (err) {
       console.error("Error fetching task details:", err);
+    } finally {
+      isFetchingRef.current = false;
     }
-  };
+  }, []);
 
+  // Debounced snapshot scheduler for bursts of SSE events
+  const scheduleFetch = useCallback((id, delay = 400) => {
+    if (!id) return;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      fetchTaskDetails(id);
+    }, delay);
+  }, [fetchTaskDetails]);
+
+  // Set up SSE stream for currentTaskId
   useEffect(() => {
     if (!currentTaskId) return;
+
     fetchTaskDetails(currentTaskId);
     setLiveEvents([]);
 
-    // Set up SSE stream
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
@@ -65,19 +85,28 @@ export default function App() {
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
+      const handleEvent = (parsed, evType) => {
+        setLiveEvents((prev) => [parsed, ...prev.slice(0, 49)]);
+
+        // Important state transitions refresh immediately; tool steps are debounced
+        if (evType === "task_status" || evType === "approval_requested" || evType === "verification") {
+          fetchTaskDetails(currentTaskId);
+        } else {
+          scheduleFetch(currentTaskId, 450);
+        }
+      };
+
       es.onmessage = (e) => {
         try {
           const parsed = JSON.parse(e.data);
-          setLiveEvents((prev) => [parsed, ...prev.slice(0, 99)]);
-          fetchTaskDetails(currentTaskId);
+          handleEvent(parsed, "message");
         } catch (_) {}
       };
 
-      es.addEventListener("ping", () => {
-        fetchTaskDetails(currentTaskId);
-      });
+      // Heartbeat pings: do NOT fetch details, just keep connection alive
+      es.addEventListener("ping", () => {});
 
-      // Also listen to common custom event types
+      // Custom event listeners
       [
         "task_created",
         "task_status",
@@ -94,34 +123,37 @@ export default function App() {
         es.addEventListener(evType, (e) => {
           try {
             const parsed = JSON.parse(e.data);
-            setLiveEvents((prev) => [parsed, ...prev.slice(0, 99)]);
-            fetchTaskDetails(currentTaskId);
+            handleEvent(parsed, evType);
           } catch (_) {}
         });
       });
 
       es.onerror = () => {
-        // Fallback polling handles it
+        // Fallback polling will handle updates
       };
     } catch (e) {
       console.error("SSE connection error:", e);
     }
 
     return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
     };
-  }, [currentTaskId]);
+  }, [currentTaskId, fetchTaskDetails, scheduleFetch]);
 
-  // Periodic polling for active task
+  // Light fallback polling only when the task is actively running or queued
+  const taskStatus = taskData?.task?.status;
   useEffect(() => {
     if (!currentTaskId) return;
+    if (taskStatus !== "running" && taskStatus !== "queued") return;
+
     const interval = setInterval(() => {
       fetchTaskDetails(currentTaskId);
-    }, 2000);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [currentTaskId]);
+  }, [currentTaskId, taskStatus, fetchTaskDetails]);
 
   const handleSubmitTask = async (e) => {
     e.preventDefault();
@@ -132,8 +164,8 @@ export default function App() {
       const res = await api.createTask(goal);
       if (res.task_id) {
         setCurrentTaskId(res.task_id);
-        await refreshTasks();
-        await fetchTaskDetails(res.task_id);
+        refreshTasks();
+        fetchTaskDetails(res.task_id);
       }
     } catch (err) {
       setError(err.message || "Failed to submit task");
@@ -172,13 +204,29 @@ export default function App() {
   const toolCalls = taskData?.tool_calls || [];
   const memory = taskData?.memory || {};
 
-  const verificationEvidence = evidence.find((e) => e.kind === "verification");
-  let parsedPlan = null;
-  if (task?.plan_json) {
+  const verificationEvidence = useMemo(
+    () => evidence.find((e) => e.kind === "verification"),
+    [evidence]
+  );
+
+  const parsedPlan = useMemo(() => {
+    if (!task?.plan_json) return null;
     try {
-      parsedPlan = typeof task.plan_json === "string" ? JSON.parse(task.plan_json) : task.plan_json;
-    } catch (_) {}
-  }
+      return typeof task.plan_json === "string" ? JSON.parse(task.plan_json) : task.plan_json;
+    } catch (_) {
+      return null;
+    }
+  }, [task?.plan_json]);
+
+  const pendingApprovals = useMemo(
+    () => approvals.filter((a) => a.status === "pending"),
+    [approvals]
+  );
+
+  const displayedToolCalls = useMemo(
+    () => toolCalls.slice(-30).reverse(),
+    [toolCalls]
+  );
 
   return (
     <div className="container">
@@ -289,39 +337,37 @@ export default function App() {
               </div>
 
               {/* Pending Approvals Card */}
-              {approvals.some((a) => a.status === "pending") && (
+              {pendingApprovals.length > 0 && (
                 <div className="card approval-card">
                   <h2 className="alert-title">⚠️ Human Approval Required</h2>
-                  {approvals
-                    .filter((a) => a.status === "pending")
-                    .map((a) => (
-                      <div key={a.id} className="approval-item">
-                        <div className="approval-details">
-                          <p><strong>Action:</strong> <code>{a.action}</code> ({a.risk || "high-risk"})</p>
-                          <p><strong>Target:</strong> {a.target_record}</p>
-                          <p><strong>Rationale:</strong> {a.rationale}</p>
-                          {a.arguments && (
-                            <pre className="code-block">{JSON.stringify(a.arguments, null, 2)}</pre>
-                          )}
-                        </div>
-                        <div className="approval-actions">
-                          <button
-                            className="btn btn-success"
-                            onClick={() => handleDecision(a.id, "approved")}
-                            disabled={loading}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            className="btn btn-danger"
-                            onClick={() => handleDecision(a.id, "rejected")}
-                            disabled={loading}
-                          >
-                            Reject
-                          </button>
-                        </div>
+                  {pendingApprovals.map((a) => (
+                    <div key={a.id} className="approval-item">
+                      <div className="approval-details">
+                        <p><strong>Action:</strong> <code>{a.action}</code> ({a.risk || "high-risk"})</p>
+                        <p><strong>Target:</strong> {a.target_record}</p>
+                        <p><strong>Rationale:</strong> {a.rationale}</p>
+                        {a.arguments && (
+                          <pre className="code-block">{JSON.stringify(a.arguments, null, 2)}</pre>
+                        )}
                       </div>
-                    ))}
+                      <div className="approval-actions">
+                        <button
+                          className="btn btn-success"
+                          onClick={() => handleDecision(a.id, "approved")}
+                          disabled={loading}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn btn-danger"
+                          onClick={() => handleDecision(a.id, "rejected")}
+                          disabled={loading}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -430,8 +476,8 @@ export default function App() {
                   <p className="empty-text">No tool activity recorded yet.</p>
                 ) : (
                   <div className="tool-calls-container">
-                    {toolCalls.map((tc, idx) => (
-                      <div key={idx} className={`tool-call-row ${tc.result?.ok ? "ok" : "fail"}`}>
+                    {displayedToolCalls.map((tc, idx) => (
+                      <div key={tc.id || idx} className={`tool-call-row ${tc.result?.ok ? "ok" : "fail"}`}>
                         <div className="tool-call-header">
                           <span className="tool-name">⚡ {tc.tool}</span>
                           <span className={`pill ${tc.result?.ok ? "pill-success" : "pill-fail"}`}>
@@ -467,8 +513,8 @@ export default function App() {
                 <div className="card">
                   <h2>Live Events Stream (SSE)</h2>
                   <div className="events-stream">
-                    {liveEvents.map((ev, i) => (
-                      <div key={i} className="event-row">
+                    {liveEvents.slice(0, 20).map((ev, i) => (
+                      <div key={ev.id || i} className="event-row">
                         <span className="event-type">{ev.type || "event"}</span>
                         <span className="event-time">{ev.created_at}</span>
                         <pre className="event-payload">
