@@ -1,153 +1,188 @@
-# AI Operator
+# AI Operator — Autonomous Company Operations Agent
 
-Proof of concept for an **AI Employee / Autonomous Company Operator**. It turns one company request into completed local work:
+A local, production-grade proof of concept demonstrating an **AI Employee / Autonomous Company Operator**. It resolves high-priority customer support tickets, grounds decisions against internal company policies, drafts replies, generates daily operational reports, safely escalates consequential actions for human approval, and deterministically verifies all output artifacts.
 
-> Review all unresolved high-priority support tickets, use our company policies to draft replies, and save a daily summary.
+---
 
-The loop is **Goal → Understand → Plan → Execute → Observe → Adapt → Verify → Complete**. Python code owns tool allowlists, retries, approvals, permissions, and verification. The LLM cannot bypass those controls.
+## Architecture & Autonomous Capabilities
 
-## What is real vs simulated
+The operator follows an explicit **Goal → Understand → Plan → Execute → Observe → Adapt → Verify → Complete** loop:
 
-**Simulated:** the mock company ticketing system (local FastAPI + SQLite + HTML UI). No real refunds, no external email.
+- **Dual-Provider Architecture:** Built for Google Gemini via `google-genai` with a deterministic offline `FakeLLM` provider that runs all tests and demo scenarios without an external API key or network access.
+- **Resilient Tool Execution & Browser Fallback:** When ticket JSON API calls fail (e.g., HTTP 503), the agent retries boundedly and falls back to a Playwright Chromium headless browser against the simulated company portal.
+- **Human Approval Boundary:** Consequential actions (such as refund authorizations $\ge$ ₹10,000) trigger human approval gates enforced in application code.
+- **Prompt Injection Defense:** Customer tickets and untrusted inputs are isolated within strictly bounded data blocks. Code-level permission checks prevent unauthorized tool execution.
+- **Idempotency & Re-entrancy:** Content hashes and ticket metadata prevent redundant drafts or duplicate actions across repeated runs.
+- **Deterministic Verifier:** An independent verification module inspects actual files on disk, schema integrity, and ticket counts without invoking the LLM.
 
-**Real:** HTTP tools, Playwright fallback against the mock HTML UI, SQLite task state, workspace draft/report files, human approval records, JSONL evidence logs, and a deterministic verifier that re-reads files and source records (no LLM).
+---
 
-Narrow on purpose: one support-ticket workflow, not a general multi-agent platform.
+## System Requirements
 
-## Architecture
+- **Python:** 3.11+ (Python 3.12 recommended)
+- **Node.js:** 20+ and `npm`
+- **Operating System:** macOS, Linux, or Windows (WSL recommended)
 
-- `mock_company/` — tickets, policies, fault injection (`127.0.0.1:8001`)
-- `tools/` — validated tools (`list_tickets`, browser fallback, policy search, files, approvals, mock refund)
-- `agent/orchestrator.py` — plan/act/observe/adapt loop
-- `agent/verifier.py` — independent checks; `complete` requires a pass
-- `server/api.py` — operator API + SSE (`127.0.0.1:8000`)
-- `ui/` — React/Vite dashboard (`127.0.0.1:5173`)
-- Default tests use `LLM_PROVIDER=fake`. Live Gemini uses `google-genai` when `LLM_PROVIDER=google` and a key/model are set.
+---
 
-## Setup (macOS, Python 3.11+, Node 20+)
+## Setup & Installation
+
+### 1. Python Environment
 
 ```bash
-python3.12 --version
-node --version
-python3.12 -m venv .venv
+# Create and activate virtual environment
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m playwright install chromium
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Install Playwright browser binaries
+playwright install chromium
+```
+
+### 2. Frontend Dependencies
+
+```bash
+npm install --prefix ui
+```
+
+### 3. Environment Configuration
+
+Copy the example environment configuration:
+
+```bash
 cp .env.example .env
-cd ui && npm install && cd ..
 ```
 
-Put the Gemini key only in `.env` as `LLM_API_KEY` (alias `GEMINI_API_KEY`). Set `LLM_MODEL` to a model your key can use (for example `gemini-2.0-flash`). Never commit `.env`.
+By default, `.env` is configured with `LLM_PROVIDER=fake`, enabling offline execution.
 
-Offline / demo without Gemini:
+To enable live Google Gemini execution:
+1. Set `LLM_PROVIDER=google`
+2. Provide your Gemini API key in `LLM_API_KEY` (or `GEMINI_API_KEY`)
+3. Set `LLM_MODEL` to an available Gemini model (e.g., `gemini-2.0-flash` or `gemini-2.5-flash`)
 
+---
+
+## Running the Application
+
+Start all three services across separate terminal tabs or background processes:
+
+### Terminal 1: Mock Company Service (Port 8001)
 ```bash
-# in .env
-LLM_PROVIDER=fake
+source .venv/bin/activate
+python -m uvicorn mock_company.app:app --host 127.0.0.1 --port 8001
 ```
+*Health Check:* `http://127.0.0.1:8001/health`  
+*HTML Portal:* `http://127.0.0.1:8001/ui/tickets`
 
-The operator also falls back to the fake provider if Google is selected but the key or model is missing. Live tasks then still run the deterministic workflow; they do not invent success without tools.
-
-## Run (three terminals, project root, venv active)
-
+### Terminal 2: AI Operator Server (Port 8000)
 ```bash
-# Terminal 1 — mock company (seeds on startup)
-python -m mock_company.seed --reset
-python -m uvicorn mock_company.app:app --host 127.0.0.1 --port 8001 --reload
-
-# Terminal 2 — operator API
-python -m uvicorn server.api:app --host 127.0.0.1 --port 8000 --reload
-
-# Terminal 3 — dashboard
-cd ui
-npm run dev -- --host 127.0.0.1 --port 5173
+source .venv/bin/activate
+python -m uvicorn server.api:app --host 127.0.0.1 --port 8000
 ```
+*Health Check:* `http://127.0.0.1:8000/health`  
+*API Docs:* `http://127.0.0.1:8000/docs`
 
-Health:
-
+### Terminal 3: React / Vite Dashboard (Port 5173)
 ```bash
-curl -s http://127.0.0.1:8001/health
-curl -s 'http://127.0.0.1:8001/api/tickets?status=open&priority=high'
-curl -s http://127.0.0.1:8000/health
+npm run dev --prefix ui
 ```
+Open `http://127.0.0.1:5173` in your browser.
 
-Open `http://127.0.0.1:5173` to submit the default goal. High-value refunds pause for approve/reject. Ticket pages: `http://127.0.0.1:8001/ui/tickets`.
+---
 
-Local-only fault switch (demo, not production-safe):
+## Verification & Automated Tests
 
+All tests and verification scripts run deterministically without requiring a live Gemini API key:
+
+### Run the Pytest Suite
 ```bash
-curl -s -X POST http://127.0.0.1:8001/admin/faults -H 'Content-Type: application/json' -d '{"api_down": true}'
-# /api/tickets -> 503, /ui/tickets still renders; agent retries then uses Playwright
-curl -s -X POST http://127.0.0.1:8001/admin/faults -H 'Content-Type: application/json' -d '{"api_down": false}'
+pytest
 ```
+Executes all 17 automated tests covering happy-path drafting, API recovery and browser fallback, human approval gates, prompt injection resistance, partial/blocked tasks, tool contracts, and independent artifact verification.
 
-## Tests and demos
-
-Default suite is offline and does not need a Gemini key:
-
+### Run Smoke Health Check
 ```bash
-python -m pytest -q
 python scripts/smoke.py
+```
+Validates imports, writable workspace paths, mock company endpoints, operator health, seeded ticket availability, and task dispatch.
+
+### Run End-to-End Demo Scenarios
+```bash
 python scripts/demo.py
-cd ui && npm run build
+```
+Executes 5 complete scenarios:
+1. `happy_path`: End-to-end ticket triage, policy retrieval, drafting, approval, and daily report generation.
+2. `api_503_browser_fallback`: Injects API faults and verifies browser recovery via Playwright.
+3. `both_paths_down`: Verifies honest `blocked` termination when both API and web UI are unreachable.
+4. `injection_and_review_flags`: Verifies prompt injection quarantine and review flagging.
+5. `idempotency`: Verifies re-run safety without generating redundant drafts.
+
+### Build Frontend for Production
+```bash
+npm run build --prefix ui
+```
+
+### Package Clean Source Archive
+```bash
 python scripts/package.py
 ```
+Generates `dist/ai-operator-source.zip` while strictly excluding caches, virtual environments, `node_modules`, SQLite databases, logs, and sensitive `.env` files.
 
-Optional live Gemini check (requires key + network):
+---
 
-```bash
-python -m pytest -q -m live
+## Project Structure
+
+```text
+ai-operator/
+├── agent/                      # Core agent runtime & loop
+│   ├── orchestrator.py         # Plan-execute-observe-adapt loop
+│   ├── planner.py              # Goal analysis & step planning
+│   ├── classifier.py           # Ticket categorization & policy matching
+│   ├── permissions.py          # Risk policy & approval boundaries
+│   ├── recovery.py             # Retry & browser fallback coordination
+│   ├── verifier.py             # Deterministic disk & state verification
+│   ├── state.py                # SQLite persistence for tasks, steps, events
+│   ├── llm.py                  # LLM provider contract, Gemini & Fake providers
+│   └── settings.py             # Central environment settings loader
+├── mock_company/               # Local simulated company service
+│   ├── app.py                  # FastAPI server with API & HTML endpoints
+│   ├── db.py                   # Mock database connection & schema
+│   ├── seed.py                 # Seeded support tickets & test scenarios
+│   ├── faults.py               # Controllable failure injection (API/UI 503)
+│   ├── policies/               # Markdown policy documents (SLA, refund, etc.)
+│   └── templates/              # Jinja2 HTML templates for Playwright fallback
+├── server/                     # Operator backend API
+│   ├── api.py                  # FastAPI endpoints & SSE event stream
+│   └── schemas.py              # Pydantic request/response schemas
+├── tools/                      # Operator tool implementations
+│   ├── tickets_api.py          # Ticket retrieval & refund API tools
+│   ├── tickets_browser.py      # Playwright browser automation fallback
+│   ├── policies.py             # BM25 lexical policy search & reading
+│   ├── approvals.py            # Human approval request dispatch
+│   ├── files.py                # Sandboxed workspace file operations
+│   └── registry.py             # Tool registration & schemas
+├── ui/                         # React + Vite live dashboard
+│   ├── src/App.jsx             # Interactive operations control center
+│   ├── src/styles.css          # Modern dashboard styles
+│   ├── src/api.js              # Operator API client
+│   └── src/main.jsx            # React root mount
+├── scripts/                    # Utility & verification scripts
+│   ├── smoke.py                # Quick system health & task submission check
+│   ├── demo.py                 # Multi-scenario demonstration runner
+│   └── package.py              # Clean source archive builder
+├── tests/                      # Deterministic pytest suite (17 tests)
+├── workspace/                  # Agent working directory (drafts, reports)
+├── requirements.txt            # Python dependencies
+├── .env.example                # Safe configuration template
+└── README.md                   # Setup and execution guide
 ```
 
-`scripts/demo.py` prints scenario name, task status, draft paths, flags, and traces for happy path, API 503 → browser fallback, both-paths-down (`blocked`), injection/review flags, and idempotent drafts.
-
-## Outputs
-
-| What | Where |
-| --- | --- |
-| Draft replies | `workspace/drafts/T-*.md` |
-| Daily summary | `workspace/reports/daily-summary.md` |
-| JSONL traces | `logs/runs/<task_id>.jsonl` |
-| Operator DB | `data/operator.sqlite3` |
-| Mock tickets | `data/mock_company.sqlite3` |
-| Policies | `mock_company/policies/*.md` |
-
-Reset mock tickets: `python -m mock_company.seed --reset`. Delete `data/*.sqlite3` and workspace draft/report files for a clean run.
-
-## Seeded tickets
-
-| ID | Role |
-| --- | --- |
-| T-101–T-103 | Ordinary high-priority, policy-backed drafts |
-| T-104 | ₹18,000 refund — human approval, then mock refund only |
-| T-105 | Missing info — flag, do not invent |
-| T-106 | Prompt injection — untrusted; cannot expand permissions |
-| T-107 | Duplicate of another ticket — skip extra draft |
-| T-108 | Conflicting policies — human review |
-| T-109 | Already resolved — excluded from unresolved queries |
-
-## Verification
-
-`agent/verifier.py` reopens draft/report files and re-queries mock records. A task is `complete` only if those checks pass. If a required file is removed after generation, status becomes `partial`.
+---
 
 ## Troubleshooting
 
-- **Import errors (`rank_bm25`, `sse_starlette`):** activate `.venv` and `pip install -r requirements.txt`.
-- **Playwright missing Chromium:** `python -m playwright install chromium`.
-- **Gemini errors:** set `LLM_API_KEY` and `LLM_MODEL`, or `LLM_PROVIDER=fake`. Keys are never logged.
-- **Ports in use:** stop other processes on 8000/8001/5173.
-- **UI cannot reach API:** operator must be on `127.0.0.1:8000`; CORS allows `http://127.0.0.1:5173`.
-- **Smoke fails because ports busy:** free 8000/8001 and rerun `python scripts/smoke.py`.
-
-## Limitations / future work
-
-No desktop computer-use, no multi-agent framework, no vector DB, no real payments or outbound mail. Browser fallback is Playwright against the mock HTML UI only.
-
-## Package
-
-```bash
-python scripts/package.py
-# dist/ai-operator-source.zip — excludes .venv, node_modules, .git, .env, caches, sqlite, runtime drafts/logs
-unzip -t dist/ai-operator-source.zip
-```
+- **Playwright missing browser:** Run `playwright install chromium` inside your active virtual environment.
+- **Port already in use:** Ensure ports `8000`, `8001`, and `5173` are free (`lsof -i :8000`, etc.).
+- **Missing Gemini key:** For offline operation, keep `LLM_PROVIDER=fake` in `.env`.
