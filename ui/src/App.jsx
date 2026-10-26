@@ -4,22 +4,33 @@ import { api } from "./api.js";
 const DEFAULT_GOAL =
   "Review all unresolved high-priority support tickets, use our company policies to draft replies, and save a daily summary.";
 
+const TERMINAL_STATUSES = new Set(["complete", "partial", "blocked", "failed", "cancelled"]);
+
 export default function App() {
   const [health, setHealth] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [currentTaskId, setCurrentTaskId] = useState(null);
   const [taskData, setTaskData] = useState(null);
+  const [taskLoading, setTaskLoading] = useState(false);
   const [goal, setGoal] = useState(DEFAULT_GOAL);
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [liveEvents, setLiveEvents] = useState([]);
   const [artifactModal, setArtifactModal] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+  const [decidingApprovals, setDecidingApprovals] = useState({});
 
   const eventSourceRef = useRef(null);
+  const currentTaskIdRef = useRef(currentTaskId);
   const isFetchingRef = useRef(false);
   const debounceTimerRef = useRef(null);
 
-  // Fetch task list and backend health (throttled)
+  // Keep ref in sync to prevent stale race conditions across async fetches
+  useEffect(() => {
+    currentTaskIdRef.current = currentTaskId;
+  }, [currentTaskId]);
+
+  // Fetch health and task list
   const refreshTasks = useCallback(async () => {
     try {
       const h = await api.health();
@@ -28,11 +39,16 @@ export default function App() {
       const res = await api.listTasks();
       if (res.tasks) {
         setTasks((prev) => {
-          if (prev.length === res.tasks.length && prev[0]?.id === res.tasks[0]?.id && prev[0]?.status === res.tasks[0]?.status) {
+          if (
+            prev.length === res.tasks.length &&
+            prev[0]?.id === res.tasks[0]?.id &&
+            prev[0]?.status === res.tasks[0]?.status
+          ) {
             return prev;
           }
           return res.tasks;
         });
+
         setCurrentTaskId((curr) => curr || (res.tasks.length > 0 ? res.tasks[0].id : null));
       }
     } catch (err) {
@@ -42,42 +58,73 @@ export default function App() {
 
   useEffect(() => {
     refreshTasks();
-    const interval = setInterval(refreshTasks, 6000);
+    const interval = setInterval(refreshTasks, 8000);
     return () => clearInterval(interval);
   }, [refreshTasks]);
 
-  // Fetch full snapshot with in-flight lock to avoid concurrent thrashing
+  // Fetch snapshot with task ID validation to prevent stale overwrite
   const fetchTaskDetails = useCallback(async (id) => {
     if (!id || isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
       const snap = await api.getTask(id);
-      setTaskData(snap);
+      // Ensure we only update state if user hasn't switched away
+      if (id === currentTaskIdRef.current) {
+        setTaskData(snap);
+        setTaskLoading(false);
+
+        // If the task has reached a terminal state, close any active SSE connection
+        const status = snap?.task?.status;
+        if (TERMINAL_STATUSES.has(status) && eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+      }
     } catch (err) {
-      console.error("Error fetching task details:", err);
+      if (id === currentTaskIdRef.current) {
+        console.error("Error fetching task details:", err);
+        setTaskLoading(false);
+      }
     } finally {
       isFetchingRef.current = false;
     }
   }, []);
 
-  // Debounced snapshot scheduler for bursts of SSE events
-  const scheduleFetch = useCallback((id, delay = 400) => {
-    if (!id) return;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      fetchTaskDetails(id);
-    }, delay);
-  }, [fetchTaskDetails]);
+  // Debounced snapshot fetch for high-frequency SSE event bursts
+  const scheduleFetch = useCallback(
+    (id, delay = 400) => {
+      if (!id) return;
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(() => {
+        fetchTaskDetails(id);
+      }, delay);
+    },
+    [fetchTaskDetails]
+  );
 
   // Set up SSE stream for currentTaskId
   useEffect(() => {
-    if (!currentTaskId) return;
+    if (!currentTaskId) {
+      setTaskData(null);
+      setLiveEvents([]);
+      return;
+    }
 
+    setTaskLoading(true);
     fetchTaskDetails(currentTaskId);
     setLiveEvents([]);
 
+    // Close any previous SSE stream
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    // Check if the task is already known to be terminal; if so, skip establishing an SSE stream
+    const existing = tasks.find((t) => t.id === currentTaskId);
+    if (existing && TERMINAL_STATUSES.has(existing.status)) {
+      setTaskLoading(false);
+      return;
     }
 
     try {
@@ -85,12 +132,35 @@ export default function App() {
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
-      const handleEvent = (parsed, evType) => {
-        setLiveEvents((prev) => [parsed, ...prev.slice(0, 49)]);
+      const handleIncomingEvent = (parsed, evType) => {
+        if (currentTaskIdRef.current !== currentTaskId) return;
 
-        // Important state transitions refresh immediately; tool steps are debounced
-        if (evType === "task_status" || evType === "approval_requested" || evType === "verification") {
+        setLiveEvents((prev) => {
+          if (parsed.id && prev.some((e) => e.id === parsed.id)) {
+            return prev;
+          }
+          return [parsed, ...prev.slice(0, 49)];
+        });
+
+        const status = parsed.payload?.status || parsed.status;
+
+        // If task reached terminal status, shut down SSE immediately to stop infinite reconnect loops
+        if (
+          evType === "task_status" &&
+          TERMINAL_STATUSES.has(status)
+        ) {
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
           fetchTaskDetails(currentTaskId);
+          refreshTasks();
+          return;
+        }
+
+        if (evType === "approval_requested" || evType === "verification") {
+          fetchTaskDetails(currentTaskId);
+          refreshTasks();
         } else {
           scheduleFetch(currentTaskId, 450);
         }
@@ -99,14 +169,14 @@ export default function App() {
       es.onmessage = (e) => {
         try {
           const parsed = JSON.parse(e.data);
-          handleEvent(parsed, "message");
+          handleIncomingEvent(parsed, "message");
         } catch (_) {}
       };
 
-      // Heartbeat pings: do NOT fetch details, just keep connection alive
+      // Heartbeat ping: do not fetch details, just verify stream is alive
       es.addEventListener("ping", () => {});
 
-      // Custom event listeners
+      // Custom SSE events
       [
         "task_created",
         "task_status",
@@ -123,13 +193,20 @@ export default function App() {
         es.addEventListener(evType, (e) => {
           try {
             const parsed = JSON.parse(e.data);
-            handleEvent(parsed, evType);
+            handleIncomingEvent(parsed, evType);
           } catch (_) {}
         });
       });
 
       es.onerror = () => {
-        // Fallback polling will handle updates
+        // If task is already completed, ensure EventSource is closed to avoid browser reconnect storms
+        const currentTask = tasks.find((t) => t.id === currentTaskId);
+        if (currentTask && TERMINAL_STATUSES.has(currentTask.status)) {
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+        }
       };
     } catch (e) {
       console.error("SSE connection error:", e);
@@ -139,11 +216,12 @@ export default function App() {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
     };
-  }, [currentTaskId, fetchTaskDetails, scheduleFetch]);
+  }, [currentTaskId, fetchTaskDetails, scheduleFetch, refreshTasks, tasks]);
 
-  // Light fallback polling only when the task is actively running or queued
+  // Polling fallback: active ONLY when task is in queued or running state
   const taskStatus = taskData?.task?.status;
   useEffect(() => {
     if (!currentTaskId) return;
@@ -155,36 +233,73 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentTaskId, taskStatus, fetchTaskDetails]);
 
+  // Keyboard shortcut: Escape to close modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && artifactModal) {
+        setArtifactModal(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [artifactModal]);
+
   const handleSubmitTask = async (e) => {
-    e.preventDefault();
-    if (!goal.trim()) return;
-    setLoading(true);
+    if (e) e.preventDefault();
+    if (!goal.trim() || submitting) return;
+    setSubmitting(true);
     setError(null);
     try {
       const res = await api.createTask(goal);
       if (res.task_id) {
         setCurrentTaskId(res.task_id);
-        refreshTasks();
-        fetchTaskDetails(res.task_id);
+        await refreshTasks();
+        await fetchTaskDetails(res.task_id);
       }
     } catch (err) {
       setError(err.message || "Failed to submit task");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+    }
+  };
+
+  const handleTextareaKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      handleSubmitTask();
     }
   };
 
   const handleDecision = async (approvalId, decision) => {
-    setLoading(true);
+    setDecidingApprovals((prev) => ({ ...prev, [approvalId]: decision }));
     try {
+      // Optimistic update
+      setTaskData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          approvals: (prev.approvals || []).map((a) =>
+            a.id === approvalId ? { ...a, status: decision, decision } : a
+          ),
+          task: { ...prev.task, status: "running" },
+        };
+      });
+
       await api.decide(approvalId, decision);
       if (currentTaskId) {
         await fetchTaskDetails(currentTaskId);
+        await refreshTasks();
       }
     } catch (err) {
       setError(`Approval decision failed: ${err.message}`);
+      if (currentTaskId) {
+        await fetchTaskDetails(currentTaskId);
+      }
     } finally {
-      setLoading(false);
+      setDecidingApprovals((prev) => {
+        const next = { ...prev };
+        delete next[approvalId];
+        return next;
+      });
     }
   };
 
@@ -192,9 +307,18 @@ export default function App() {
     try {
       const res = await api.artifact(path);
       setArtifactModal({ path, content: res.content });
+      setCopyFeedback(false);
     } catch (err) {
       setError(`Failed to read artifact ${path}: ${err.message}`);
     }
+  };
+
+  const handleCopyArtifact = () => {
+    if (!artifactModal?.content) return;
+    navigator.clipboard.writeText(artifactModal.content).then(() => {
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    });
   };
 
   const task = taskData?.task;
@@ -250,7 +374,9 @@ export default function App() {
       {error && (
         <div className="alert alert-error">
           <span>{error}</span>
-          <button className="btn-close" onClick={() => setError(null)}>×</button>
+          <button className="btn-close" onClick={() => setError(null)} title="Dismiss">
+            ×
+          </button>
         </div>
       )}
 
@@ -268,17 +394,26 @@ export default function App() {
                   rows={4}
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
+                  onKeyDown={handleTextareaKeyDown}
                   placeholder="Enter task goal..."
                 />
+                <span className="kbd-hint">Press <strong>Ctrl+Enter</strong> or <strong>⌘+Enter</strong> to run</span>
               </div>
               <div className="button-group">
-                <button type="submit" className="btn btn-primary" disabled={loading}>
-                  {loading ? "Submitting..." : "Execute Goal"}
+                <button type="submit" className="btn btn-primary" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <span className="spinner"></span> Submitting...
+                    </>
+                  ) : (
+                    "Execute Goal"
+                  )}
                 </button>
                 <button
                   type="button"
                   className="btn btn-secondary"
                   onClick={() => setGoal(DEFAULT_GOAL)}
+                  disabled={submitting}
                 >
                   Reset Default
                 </button>
@@ -289,7 +424,9 @@ export default function App() {
           <div className="card">
             <div className="card-header-flex">
               <h2>Recent Tasks</h2>
-              <button className="btn-text" onClick={refreshTasks}>Refresh</button>
+              <button className="btn-text" onClick={refreshTasks}>
+                Refresh
+              </button>
             </div>
             {tasks.length === 0 ? (
               <p className="empty-text">No tasks submitted yet.</p>
@@ -315,7 +452,11 @@ export default function App() {
 
         {/* Middle & Right: Active Task Details */}
         <section className="column-wide">
-          {!task ? (
+          {taskLoading && !task ? (
+            <div className="card empty-card">
+              <span className="spinner"></span> Loading task details...
+            </div>
+          ) : !task ? (
             <div className="card empty-card">
               <p>Select a task or submit a new goal to view execution details.</p>
             </div>
@@ -330,9 +471,13 @@ export default function App() {
                   </div>
                   {task.updated_at && <span className="timestamp">{task.updated_at}</span>}
                 </div>
-                <p className="task-goal-text"><strong>Goal:</strong> {task.goal}</p>
+                <p className="task-goal-text">
+                  <strong>Goal:</strong> {task.goal}
+                </p>
                 {task.reason && (
-                  <p className="task-reason"><strong>Reason:</strong> {task.reason}</p>
+                  <p className="task-reason">
+                    <strong>Reason:</strong> {task.reason}
+                  </p>
                 )}
               </div>
 
@@ -340,34 +485,55 @@ export default function App() {
               {pendingApprovals.length > 0 && (
                 <div className="card approval-card">
                   <h2 className="alert-title">⚠️ Human Approval Required</h2>
-                  {pendingApprovals.map((a) => (
-                    <div key={a.id} className="approval-item">
-                      <div className="approval-details">
-                        <p><strong>Action:</strong> <code>{a.action}</code> ({a.risk || "high-risk"})</p>
-                        <p><strong>Target:</strong> {a.target_record}</p>
-                        <p><strong>Rationale:</strong> {a.rationale}</p>
-                        {a.arguments && (
-                          <pre className="code-block">{JSON.stringify(a.arguments, null, 2)}</pre>
-                        )}
+                  {pendingApprovals.map((a) => {
+                    const isDeciding = Boolean(decidingApprovals[a.id]);
+                    return (
+                      <div key={a.id} className="approval-item">
+                        <div className="approval-details">
+                          <p>
+                            <strong>Action:</strong> <code>{a.action}</code> ({a.risk || "high-risk"})
+                          </p>
+                          <p>
+                            <strong>Target:</strong> {a.target_record}
+                          </p>
+                          <p>
+                            <strong>Rationale:</strong> {a.rationale}
+                          </p>
+                          {a.arguments && (
+                            <pre className="code-block">{JSON.stringify(a.arguments, null, 2)}</pre>
+                          )}
+                        </div>
+                        <div className="approval-actions">
+                          <button
+                            className="btn btn-success"
+                            onClick={() => handleDecision(a.id, "approved")}
+                            disabled={isDeciding}
+                          >
+                            {decidingApprovals[a.id] === "approved" ? (
+                              <>
+                                <span className="spinner"></span> Approving...
+                              </>
+                            ) : (
+                              "Approve"
+                            )}
+                          </button>
+                          <button
+                            className="btn btn-danger"
+                            onClick={() => handleDecision(a.id, "rejected")}
+                            disabled={isDeciding}
+                          >
+                            {decidingApprovals[a.id] === "rejected" ? (
+                              <>
+                                <span className="spinner"></span> Rejecting...
+                              </>
+                            ) : (
+                              "Reject"
+                            )}
+                          </button>
+                        </div>
                       </div>
-                      <div className="approval-actions">
-                        <button
-                          className="btn btn-success"
-                          onClick={() => handleDecision(a.id, "approved")}
-                          disabled={loading}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="btn btn-danger"
-                          onClick={() => handleDecision(a.id, "rejected")}
-                          disabled={loading}
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -411,7 +577,8 @@ export default function App() {
                       <ul className="checks-list">
                         {verificationEvidence.checks.map((chk, i) => (
                           <li key={i} className={chk.ok ? "check-ok" : "check-fail"}>
-                            {chk.ok ? "✓" : "✗"} <strong>{chk.name}:</strong> {chk.detail || (chk.ok ? "Passed" : "Failed")}
+                            {chk.ok ? "✓" : "✗"} <strong>{chk.name}:</strong>{" "}
+                            {chk.detail || (chk.ok ? "Passed" : "Failed")}
                           </li>
                         ))}
                       </ul>
@@ -536,7 +703,14 @@ export default function App() {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{artifactModal.path}</h3>
-              <button className="btn-close" onClick={() => setArtifactModal(null)}>×</button>
+              <div className="modal-header-actions">
+                <button className="btn-copy" onClick={handleCopyArtifact}>
+                  {copyFeedback ? "Copied! ✓" : "Copy"}
+                </button>
+                <button className="btn-close" onClick={() => setArtifactModal(null)} title="Close (Esc)">
+                  ×
+                </button>
+              </div>
             </div>
             <div className="modal-body">
               <pre className="artifact-body">{artifactModal.content}</pre>

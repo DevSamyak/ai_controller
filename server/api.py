@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -80,13 +80,21 @@ def get_task(task_id: str):
 
 
 @app.get("/tasks/{task_id}/events")
-async def task_events(task_id: str):
+async def task_events(request: Request, task_id: str, after_id: int = Query(default=0)):
     orch = _safe_orch()
     if orch.store.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
 
+    header_last = request.headers.get("last-event-id")
+    start_id = after_id
+    if header_last:
+        try:
+            start_id = max(start_id, int(header_last))
+        except ValueError:
+            pass
+
     async def gen():
-        last_id = 0
+        last_id = start_id
         idle = 0
         while idle < 300:
             events = orch.store.list_events(task_id, after_id=last_id)
@@ -94,12 +102,12 @@ async def task_events(task_id: str):
                 idle = 0
                 for event in events:
                     last_id = event["id"]
-                    yield {"event": event["type"], "data": _json(event)}
+                    yield {"id": str(event["id"]), "event": event["type"], "data": _json(event)}
             else:
                 idle += 1
                 yield {"event": "ping", "data": "{}"}
             status = (orch.store.get_task(task_id) or {}).get("status")
-            if status in {"complete", "partial", "blocked", "failed", "cancelled"}:
+            if status in {"complete", "partial", "blocked", "failed", "cancelled"} and not events:
                 break
             await asyncio.sleep(0.4)
 
