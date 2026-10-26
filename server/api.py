@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -14,20 +13,6 @@ from server.schemas import ApprovalDecision, TaskCreate
 
 _orch: Orchestrator | None = None
 _lock = asyncio.Lock()
-
-
-def get_orchestrator() -> Orchestrator:
-    global _orch
-    if _orch is None:
-        settings = load_settings()
-        try:
-            _orch = Orchestrator(settings=settings)
-        except RuntimeError as exc:
-            # Live provider misconfigured: still serve health/mock; fail live tasks clearly.
-            settings_fake = load_settings()
-            object.__setattr__(settings_fake, "llm_provider", "fake") if False else None
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _orch
 
 
 def _safe_orch() -> Orchestrator:

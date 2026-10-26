@@ -109,11 +109,16 @@ class FakeLLM:
             if approval["status"] == "pending":
                 return LLMAction(type="wait_approval", reason="High-value refund waiting for a human decision")
             if approval["status"] == "approved" and ticket_id not in mem["refunded"]:
-                return LLMAction(
-                    type="tool",
-                    tool="issue_mock_refund",
-                    arguments={"ticket_id": ticket_id, "amount": decision["amount"]},
-                )
+                last = snapshot.get("last_observation") or {}
+                last_result = (last.get("result") or {}) if last.get("tool") == "issue_mock_refund" else {}
+                if last_result and not last_result.get("ok"):
+                    mem["refunded"][ticket_id] = {"skipped": True, "error": last_result.get("error")}
+                else:
+                    return LLMAction(
+                        type="tool",
+                        tool="issue_mock_refund",
+                        arguments={"ticket_id": ticket_id, "amount": decision["amount"]},
+                    )
             if ticket_id not in mem["drafted"]:
                 policy = preferred_policy(ticket, mem["policies"].get(ticket_id))
                 extra = (
@@ -135,6 +140,7 @@ class FakeLLM:
                 arguments={
                     "relative_path": "reports/daily-summary.md",
                     "content": _report_placeholder(mem),
+                    "overwrite": True,
                 },
             )
         return LLMAction(type="finish", reason="All ticket work recorded")

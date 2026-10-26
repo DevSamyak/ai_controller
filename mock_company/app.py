@@ -60,7 +60,11 @@ async def fault_middleware(request: Request, call_next):
                 media_type="application/json",
             )
         if path.startswith("/ui/") and ui_is_down(conn):
-            raise HTTPException(status_code=503, detail="mock company UI fault injected")
+            return HTMLResponse(
+                "mock company UI fault injected",
+                status_code=503,
+                media_type="text/plain",
+            )
         return await call_next(request)
     finally:
         conn.close()

@@ -104,3 +104,31 @@ def issue_mock_refund(settings: Settings, args: IssueRefundArgs) -> ToolResult:
             )
     except httpx.HTTPError as exc:
         return _http_error(exc)
+
+
+def issue_mock_refund_sqlite(settings: Settings, args: IssueRefundArgs) -> ToolResult:
+    """Direct mock-DB mutation used only after HTTP retries are exhausted."""
+    from mock_company.db import apply_refund, connect, init_schema
+
+    conn = connect(settings.mock_database_path)
+    try:
+        init_schema(conn)
+        ticket = apply_refund(conn, args.ticket_id, args.amount)
+        if ticket is None:
+            return ToolResult(ok=False, error=f"ticket {args.ticket_id} not found")
+        normalized = normalize_ticket(ticket, "sqlite")
+        return ToolResult(
+            ok=True,
+            data={"ticket": normalized, "source": "sqlite", "refunded": True, "amount": args.amount},
+            evidence=[
+                {
+                    "kind": "mock_refund",
+                    "ticket_id": args.ticket_id,
+                    "amount": args.amount,
+                    "source": "sqlite",
+                    "note": "simulated local SQLite mutation after API retries exhausted",
+                }
+            ],
+        )
+    finally:
+        conn.close()

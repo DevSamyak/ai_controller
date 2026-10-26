@@ -90,20 +90,23 @@ def main() -> None:
         snap = approve_first(operator, snap)
         record("happy_path", snap)
 
-        httpx.post(f"{url}/admin/faults", json={"api_down": True}, timeout=5)
         operator = orch()
+        httpx.post(f"{url}/admin/faults", json={"api_down": True}, timeout=5)
         snap = operator.run(operator.submit(GOAL)["id"])
         extra = {
-            "source": (snap.get("memory") or {}).get("list", {}).get("source"),
+            "source": ((snap.get("memory") or {}).get("list") or {}).get("source"),
             "events": sorted({e["type"] for e in snap["events"]}),
         }
-        snap = approve_first(operator, snap)
-        extra["final_status"] = snap["task"]["status"]
+        if extra["source"] != "browser" or "browser_fallback" not in extra["events"]:
+            extra["error"] = "expected API 503 then Playwright fallback"
+        else:
+            snap = approve_first(operator, snap)
+            extra["final_status"] = snap["task"]["status"]
         record("api_503_browser_fallback", snap, extra)
         httpx.post(f"{url}/admin/faults", json={"api_down": False}, timeout=5)
 
-        httpx.post(f"{url}/admin/faults", json={"api_down": True, "ui_down": True}, timeout=5)
         operator = orch()
+        httpx.post(f"{url}/admin/faults", json={"api_down": True, "ui_down": True}, timeout=5)
         snap = operator.run(operator.submit(GOAL)["id"])
         record("both_paths_down", snap)
         httpx.post(f"{url}/admin/faults", json={"api_down": False, "ui_down": False}, timeout=5)
@@ -130,9 +133,15 @@ def main() -> None:
     print("\nScenario summary")
     for row in RESULTS:
         print(f"- {row['scenario']}: {row['status']}")
-    bad = [r for r in RESULTS if r["scenario"] != "both_paths_down" and r["status"] not in {"complete", "waiting_approval"}]
+    bad = [
+        r
+        for r in RESULTS
+        if r["scenario"] != "both_paths_down" and r["status"] not in {"complete", "waiting_approval"}
+    ]
+    fallback = next((r for r in RESULTS if r["scenario"] == "api_503_browser_fallback"), None)
+    fallback_ok = bool(fallback and fallback.get("source") == "browser" and fallback.get("final_status") == "complete")
     blocked_ok = any(r["scenario"] == "both_paths_down" and r["status"] == "blocked" for r in RESULTS)
-    if bad or not blocked_ok:
+    if bad or not blocked_ok or not fallback_ok:
         raise SystemExit(1)
 
 

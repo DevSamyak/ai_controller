@@ -57,7 +57,7 @@ def list_tickets_browser(settings, args: ListTicketsArgs) -> ToolResult:
         url += "?" + urlencode(params)
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             response = page.goto(url, wait_until="domcontentloaded")
             if response is not None and response.status >= 400:
@@ -103,7 +103,7 @@ def get_ticket_browser(settings, args: GetTicketArgs) -> ToolResult:
     url = f"{settings.mock_company_url}/ui/tickets/{args.ticket_id}"
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             response = page.goto(url, wait_until="domcontentloaded")
             if response is not None and response.status >= 400:
